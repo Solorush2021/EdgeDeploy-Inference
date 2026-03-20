@@ -89,6 +89,7 @@ inline std::unordered_map<std::string, std::string> GetQnnEpOptions(const QnnEPC
     // HTP Power optimization params
     options["htp_performance_mode"] = profile_str;
     options["rpc_control_latency"] = std::to_string(config.rpc_latency_us);
+    options["htp_voltage_corner"] = std::to_string(config.dsp_voltage_corner);
     
     return options;
 }

@@ -5,7 +5,6 @@ Measures latency (p50, p95, p99), accuracy (Word Error Rate - WER / Character Er
 and hardware-specific power consumption telemetry across edge compute platforms:
 1. Snapdragon (Qualcomm Android sysfs telemetry)
 2. NVIDIA Jetson Orin (INA3221 hwmon rails)
-3. Apple M-Series (macOS powermetrics ANE & CPU samplers)
 """
 
 import os
@@ -16,6 +15,13 @@ import platform
 import subprocess
 import re
 import numpy as np
+
+# Reconfigure stdout to use UTF-8 to handle Indic characters on all platforms (like Windows cmd/powershell)
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 # Helper for calculating Word Error Rate (WER) and Character Error Rate (CER) via Levenshtein distance
 def calculate_edit_distance(ref, hyp):
@@ -104,24 +110,6 @@ class PowerTelemetry:
                     except Exception:
                         pass
             return 8500.0 # Jetson Orin dynamic baseline simulation (8.5W)
-
-        elif self.platform == "apple-m" or (self.platform == "auto" and platform.system() == "Darwin"):
-            # macOS powermetrics ANE & CPU power
-            try:
-                # Runs powermetrics command to capture a single 100ms sample
-                cmd = ["sudo", "powermetrics", "-i", "100", "-n", "1", "--samplers", "cpu_power"]
-                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=1.5)
-                
-                # Parse CPU Power and ANE Power using regex
-                cpu_match = re.search(r"CPU Power:\s+(\d+)\s+mW", res.stdout)
-                ane_match = re.search(r"ANE Power:\s+(\d+)\s+mW", res.stdout)
-                
-                cpu_mw = float(cpu_match.group(1)) if cpu_match else 0.0
-                ane_mw = float(ane_match.group(1)) if ane_match else 0.0
-                
-                return cpu_mw + ane_mw
-            except Exception:
-                return 1800.0 # Apple M-Series ANE active simulation (1.8W)
 
         else:
             # Fallback simulator / standard PC/Server baseline
@@ -212,7 +200,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--platform", 
         type=str, 
-        choices=["snapdragon", "jetson", "apple-m", "auto"], 
+        choices=["snapdragon", "jetson", "generic", "auto"], 
         default="auto",
         help="Target platform hardware layout to read power metrics"
     )
@@ -222,14 +210,11 @@ if __name__ == "__main__":
     # Detect platform automatically if requested
     detected_platform = args.platform
     if detected_platform == "auto":
-        sys_plat = platform.system()
-        if sys_plat == "Darwin":
-            detected_platform = "apple-m"
-        elif os.path.exists("/sys/class/power_supply/battery"):
+        if os.path.exists("/sys/class/power_supply/battery"):
             detected_platform = "snapdragon"
         elif os.path.exists("/sys/class/hwmon"):
             detected_platform = "jetson"
         else:
-            detected_platform = "x86-generic"
+            detected_platform = "generic"
 
     run_benchmark(detected_platform, args.runs)

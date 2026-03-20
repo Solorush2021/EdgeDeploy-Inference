@@ -59,48 +59,143 @@ def collate_speech_fn(batch):
         
     return padded_batch, torch.tensor(lengths, dtype=torch.int64)
 
-class DummyConformerBlock(nn.Module):
+class ConformerFeedForward(nn.Module):
+    """
+    Feed-Forward module of the Conformer architecture (half-step updates).
+    """
+    def __init__(self, d_model=256, expansion_factor=4, dropout=0.1):
+        super().__init__()
+        self.layer_norm = nn.LayerNorm(d_model)
+        self.linear1 = nn.Linear(d_model, d_model * expansion_factor)
+        self.act = nn.SiLU()
+        self.dropout1 = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(d_model * expansion_factor, d_model)
+        self.dropout2 = nn.Dropout(dropout)
+
+    def forward(self, x):
+        x_norm = self.layer_norm(x)
+        x_proj = self.linear1(x_norm)
+        x_act = self.act(x_proj)
+        x_drop1 = self.dropout1(x_act)
+        x_proj2 = self.linear2(x_drop1)
+        return self.dropout2(x_proj2)
+
+
+class ConformerConvModule(nn.Module):
+    """
+    Convolution module of the Conformer block (GLU activation + Depthwise Separable Conv).
+    """
+    def __init__(self, d_model=256, kernel_size=31, dropout=0.1):
+        super().__init__()
+        self.layer_norm = nn.LayerNorm(d_model)
+        self.pointwise_conv1 = nn.Conv1d(d_model, 2 * d_model, kernel_size=1)
+        self.glu = nn.GLU(dim=1)
+        self.depthwise_conv = nn.Conv1d(
+            d_model, d_model, kernel_size=kernel_size, 
+            padding=(kernel_size - 1) // 2, groups=d_model
+        )
+        self.batch_norm = nn.BatchNorm1d(d_model)
+        self.act = nn.SiLU()
+        self.pointwise_conv2 = nn.Conv1d(d_model, d_model, kernel_size=1)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        x_norm = self.layer_norm(x)
+        # Transpose for Conv1d: [Batch, d_model, SeqLen]
+        x_conv = x_norm.transpose(1, 2)
+        
+        # Pointwise Conv & GLU gating
+        x_conv = self.pointwise_conv1(x_conv)
+        x_conv = self.glu(x_conv)
+        
+        # Depthwise Conv
+        x_conv = self.depthwise_conv(x_conv)
+        x_conv = self.batch_norm(x_conv)
+        x_conv = self.act(x_conv)
+        
+        # Pointwise Conv 2
+        x_conv = self.pointwise_conv2(x_conv)
+        x_conv = self.dropout(x_conv)
+        
+        # Transpose back: [Batch, SeqLen, d_model]
+        return x_conv.transpose(1, 2)
+
+
+class ConformerBlock(nn.Module):
     """
     Representative Conformer Block incorporating dynamic scaling blocks (Linear, Conv, Attention)
     to demonstrate PyTorch QDQ placement.
     """
-    def __init__(self, d_model=256, n_heads=4):
+    def __init__(self, d_model=256, n_heads=4, ff_expansion=4, kernel_size=31, dropout=0.1):
         super().__init__()
-        self.linear_in = nn.Linear(80, d_model)
-        self.mhsa = nn.MultiheadAttention(d_model, n_heads, batch_first=True)
-        self.conv1d = nn.Conv1d(d_model, d_model, kernel_size=3, padding=1)
-        self.linear_out = nn.Linear(d_model, 90) # Vocab size projection
+        self.ff1 = ConformerFeedForward(d_model, ff_expansion, dropout)
+        self.layer_norm_attn = nn.LayerNorm(d_model)
+        self.mhsa = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
+        self.conv_module = ConformerConvModule(d_model, kernel_size, dropout)
+        self.ff2 = ConformerFeedForward(d_model, ff_expansion, dropout)
+        self.layer_norm_out = nn.LayerNorm(d_model)
 
     def forward(self, x):
-        # x: [Batch, SeqLen, 80]
-        x = self.linear_in(x)
+        # Macaron-style sandwich structure
+        x = x + 0.5 * self.ff1(x)
         
-        # Self-Attention block
-        attn_out, _ = self.mhsa(x, x, x)
+        x_norm = self.layer_norm_attn(x)
+        attn_out, _ = self.mhsa(x_norm, x_norm, x_norm)
         x = x + attn_out
         
-        # Conv block (needs transpose for Conv1d)
-        conv_in = x.transpose(1, 2)
-        conv_out = self.conv1d(conv_in).transpose(1, 2)
-        x = x + conv_out
+        x = x + self.conv_module(x)
+        x = x + 0.5 * self.ff2(x)
+        return self.layer_norm_out(x)
+
+
+class IndicConformer120M(nn.Module):
+    """
+    Full acoustic Conformer model with Conv2D downsampling, Conformer blocks, 
+    and logit vocabulary projection.
+    """
+    def __init__(self, d_model=256, num_blocks=4, vocab_size=90):
+        super().__init__()
+        self.conv_subsample = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU()
+        )
+        self.linear_proj = nn.Linear(64 * 20, d_model)  # downsampled features
+        self.blocks = nn.ModuleList([ConformerBlock(d_model=d_model) for _ in range(num_blocks)])
+        self.ctc_projection = nn.Linear(d_model, vocab_size)
+
+    def forward(self, x):
+        batch, seq_len, feat_dim = x.size()
+        # Shape: [Batch, 1, SeqLen, 80]
+        x = x.unsqueeze(1)
+        x = self.conv_subsample(x)
         
-        # Final logit projection
-        logits = self.linear_out(x)
+        # Reshape to [Batch, SeqLen/4, d_model]
+        x = x.permute(0, 2, 1, 3).contiguous()
+        x = x.view(batch, x.size(1), -1)
+        x = self.linear_proj(x)
+        
+        for block in self.blocks:
+            x = block(x)
+            
+        logits = self.ctc_projection(x)
         return logits
+
 
 def run_qat_calibration(model_path, output_path, epochs=1):
     print("Initializing IndicConformer-120M calibration pipeline...")
     
     # 1. Instantiate the Model
-    model = DummyConformerBlock()
+    model = IndicConformer120M()
     model.train()
     
-    # 2. Configure Dynamic Quantization modules mapping (QAT calibration)
-    # Using PyTorch FX Graph or traditional dynamic quant module swap
-    print("Swapping static nodes with Quantization-Aware Training wrappers...")
-    qconfig = torch.ao.quantization.get_default_qat_qconfig('qnnpack')
-    model.qconfig = qconfig
+    # 2. Configure PyTorch Eager Mode QAT preparation
+    print("Preparing model for Quantization-Aware Training (QAT)...")
+    # Using 'qnnpack' backend configuration for ARM NPU targets (compatible with QNN)
+    model.qconfig = torch.ao.quantization.get_default_qat_qconfig('qnnpack')
     
+    # Prepare model in-place (inserts observers and fake quantize modules)
     torch.ao.quantization.prepare_qat(model, inplace=True)
     
     # 3. Load Speech Calibration DataLoader
@@ -119,11 +214,13 @@ def run_qat_calibration(model_path, output_path, epochs=1):
     print("Running forward calibration passes to compute activation/weight thresholds...")
     for epoch in range(epochs):
         total_loss = 0.0
-        for i, (padded_audio, lengths) in enumerate(calibration_loader):
+        for i, padded_audio in enumerate(calibration_loader):
+            # unpack from collate
+            audio_batch, lengths = padded_audio
             optimizer.zero_grad()
             
             # Forward pass through QAT model (updates dynamic observer scales)
-            outputs = model(padded_audio)
+            outputs = model(audio_batch)
             
             # Calculate dummy loss to backpropagate gradients for scale calibration
             dummy_target = torch.randint(0, 90, (outputs.size(0), outputs.size(1)))
@@ -135,7 +232,7 @@ def run_qat_calibration(model_path, output_path, epochs=1):
             
         print(f"Calibration Epoch {epoch+1}/{epochs} | Aggregated Scale Loss: {total_loss/len(calibration_loader):.4f}")
         
-    # Convert model to quantized states
+    # Convert model to quantized state (eval mode removes fake quantize in favor of real int8 weights/scales)
     model.eval()
     torch.ao.quantization.convert(model, inplace=True)
     print("QAT calibration completed. Dynamic quantization configurations calculated.")
@@ -143,7 +240,6 @@ def run_qat_calibration(model_path, output_path, epochs=1):
     # 5. Export calibrated ONNX representation containing QDQ nodes
     dummy_input = torch.randn(1, 200, 80)
     
-    # Exporting
     torch.onnx.export(
         model, 
         dummy_input, 
@@ -159,7 +255,7 @@ def run_qat_calibration(model_path, output_path, epochs=1):
         }
     )
     print(f"Calibrated dynamic QDQ model exported to: {output_path}")
-
+ 
     # 6. Apply ONNX Runtime dynamic INT8 quantization for deployment fallback
     # Compresses Model size down from 480MB (FP32) to ~120-145MB (INT8)
     quantized_ort_path = output_path.replace(".onnx", "_int8.onnx")

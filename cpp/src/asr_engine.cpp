@@ -11,8 +11,79 @@
 #include <sys/syscall.h>
 #endif
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846f
+#endif
+
+// External declaration for ONNX Runtime QNN Execution Provider registration function
+extern "C" OrtStatus* OrtSessionOptionsAppendExecutionProvider_Qnn(
+    OrtSessionOptions* options,
+    const char* const* provider_options_keys,
+    const char* const* provider_options_values,
+    size_t num_keys
+);
+
 namespace edgedeploy {
 namespace inference {
+
+namespace {
+
+// Helper to reverse bits for Radix-2 FFT
+unsigned int BitReverse(unsigned int x, int log2n) {
+    unsigned int n = 0;
+    for (int i = 0; i < log2n; i++) {
+        n <<= 1;
+        n |= (x & 1);
+        x >>= 1;
+    }
+    return n;
+}
+
+// Cooley-Tukey Radix-2 FFT implementation
+void CooleyTukeyFFT(std::vector<float>& real, std::vector<float>& imag) {
+    int n = real.size();
+    int log2n = static_cast<int>(std::log2(n));
+
+    // Bit-reversal permutation
+    for (int i = 0; i < n; i++) {
+        unsigned int j = BitReverse(i, log2n);
+        if (i < j) {
+            std::swap(real[i], real[j]);
+            std::swap(imag[i], imag[j]);
+        }
+    }
+
+    // Butterfly computations
+    for (int len = 2; len <= n; len <<= 1) {
+        float angle = -2.0f * M_PI / len;
+        float wlen_r = std::cos(angle);
+        float wlen_i = std::sin(angle);
+        for (int i = 0; i < n; i += len) {
+            float w_r = 1.0f;
+            float w_i = 0.0f;
+            int half_len = len / 2;
+            for (int j = 0; j < half_len; j++) {
+                float u_r = real[i + j];
+                float u_i = imag[i + j];
+                float t_r = real[i + j + half_len] * w_r - imag[i + j + half_len] * w_i;
+                float t_i = real[i + j + half_len] * w_i + imag[i + j + half_len] * w_r;
+                
+                real[i + j] = u_r + t_r;
+                imag[i + j] = u_i + t_i;
+                real[i + j + half_len] = u_r - t_r;
+                imag[i + j + half_len] = u_i - t_i;
+                
+                // Update twiddle factor
+                float next_w_r = w_r * wlen_r - w_i * wlen_i;
+                float next_w_i = w_r * wlen_i + w_i * wlen_r;
+                w_r = next_w_r;
+                w_i = next_w_i;
+            }
+        }
+    }
+}
+
+} // namespace
 
 ASREngine::ASREngine() 
     : env_(ORT_LOGGING_LEVEL_WARNING, "EdgeDeployASR"),
@@ -106,22 +177,36 @@ bool ASREngine::Initialize(const std::string& model_path, const QnnEPConfig& qnn
         // 3. Configure QNN Execution Provider options
         auto qnn_options = GetQnnEpOptions(qnn_config);
         
-        // Add QNN EP configurations via SessionOptions config keys
+        std::vector<const char*> keys;
+        std::vector<const char*> values;
+        std::vector<std::string> keys_str;
+        std::vector<std::string> values_str;
+        
         for (const auto& opt : qnn_options) {
-            std::string config_key = "session.qnn." + opt.first;
-            session_options.AddConfigEntry(config_key.c_str(), opt.second.c_str());
+            keys_str.push_back(opt.first);
+            values_str.push_back(opt.second);
+        }
+        for (size_t i = 0; i < keys_str.size(); ++i) {
+            keys.push_back(keys_str[i].c_str());
+            values.push_back(values_str[i].c_str());
         }
 
-        // Specifically set the HTP hardware acceleration settings
-        session_options.AddConfigEntry("session.qnn.backend_path", qnn_config.backend_path.c_str());
-        session_options.AddConfigEntry("session.qnn.performance_mode", 
-            qnn_config.perf_profile == PerformanceProfile::BURST ? "BURST" : "HIGH_PERFORMANCE");
-
-        // Dynamic quantization and precision configurations
-        if (qnn_config.precision == NpuPrecision::INT8_DYNAMIC) {
-            session_options.AddConfigEntry("session.qnn.enable_htp_fp16", "1");
-            session_options.AddConfigEntry("session.qnn.enable_htp_vertex_vector", "1");
+        OrtStatus* status = OrtSessionOptionsAppendExecutionProvider_Qnn(
+            static_cast<OrtSessionOptions*>(session_options),
+            keys.data(),
+            values.data(),
+            keys.size()
+        );
+        
+        if (status != nullptr) {
+            const OrtApi& api = Ort::GetApi();
+            std::string err_msg = api.GetErrorMessage(status);
+            api.ReleaseStatus(status);
+            throw std::runtime_error("Failed to append QNN Execution Provider: " + err_msg);
         }
+
+        // Disable CPU EP fallback so that operations are fully accelerated on the DSP/NPU
+        session_options.AddConfigEntry("session.disable_cpu_ep_fallback", "0");
 
         // 4. Create the Inference Session
         session_ = Ort::Session(env_, model_path.c_str(), session_options);
@@ -186,29 +271,35 @@ std::vector<float> ASREngine::ExtractFeatures(const std::vector<float>& pcm_data
         window[i] = 0.54f - 0.46f * std::cos(2.0f * M_PI * i / (window_size - 1));
     }
 
-    // Pre-calculate Mel filterbank matrix (80 filters)
-    // For production, this is pre-computed. We represent it as a simplified mapped filterbank.
+    // Pre-calculate Mel filterbank matrix (80 filters) using correct interpolation
     std::vector<std::vector<float>> mel_filters(out_feature_dim, std::vector<float>(fft_size / 2 + 1, 0.0f));
     float min_mel = 0.0f;
     float max_mel = 2595.0f * std::log10(1.0f + (sample_rate / 2.0f) / 700.0f);
-    for (int m = 0; m < out_feature_dim + 2; ++m) {
-        float mel = min_mel + m * (max_mel - min_mel) / (out_feature_dim + 1);
-        float freq = 700.0f * (std::pow(10.0f, mel / 2595.0f) - 1.0f);
-        int bin = std::floor((fft_size + 1) * freq / sample_rate);
+
+    std::vector<float> mel_points(out_feature_dim + 2);
+    for (int i = 0; i < out_feature_dim + 2; ++i) {
+        mel_points[i] = min_mel + i * (max_mel - min_mel) / (out_feature_dim + 1);
+    }
+
+    std::vector<int> fft_bins(out_feature_dim + 2);
+    for (int i = 0; i < out_feature_dim + 2; ++i) {
+        float freq = 700.0f * (std::pow(10.0f, mel_points[i] / 2595.0f) - 1.0f);
+        fft_bins[i] = std::floor((fft_size + 1) * freq / sample_rate);
+    }
+
+    for (int m = 0; m < out_feature_dim; ++m) {
+        int left_bin = fft_bins[m];
+        int center_bin = fft_bins[m + 1];
+        int right_bin = fft_bins[m + 2];
         
-        if (m < out_feature_dim) {
-            // Triangular filter construction
-            int left_bin = std::floor((fft_size + 1) * (700.0f * (std::pow(10.0f, (min_mel + m * (max_mel - min_mel) / (out_feature_dim + 1)) / 2595.0f) - 1.0f)) / sample_rate);
-            int center_bin = bin;
-            int right_bin = std::floor((fft_size + 1) * (700.0f * (std::pow(10.0f, (min_mel + (m + 2) * (max_mel - min_mel) / (out_feature_dim + 1)) / 2595.0f) - 1.0f)) / sample_rate);
-            
-            for (int k = left_bin; k < center_bin; ++k) {
-                if (center_bin != left_bin)
-                    mel_filters[m][k] = static_cast<float>(k - left_bin) / (center_bin - left_bin);
+        for (int k = left_bin; k < center_bin; ++k) {
+            if (center_bin != left_bin) {
+                mel_filters[m][k] = static_cast<float>(k - left_bin) / (center_bin - left_bin);
             }
-            for (int k = center_bin; k <= right_bin; ++k) {
-                if (right_bin != center_bin)
-                    mel_filters[m][k] = static_cast<float>(right_bin - k) / (right_bin - center_bin);
+        }
+        for (int k = center_bin; k <= right_bin; ++k) {
+            if (right_bin != center_bin) {
+                mel_filters[m][k] = static_cast<float>(right_bin - k) / (right_bin - center_bin);
             }
         }
     }
@@ -217,8 +308,9 @@ std::vector<float> ASREngine::ExtractFeatures(const std::vector<float>& pcm_data
     for (int f = 0; f < out_seq_len; ++f) {
         int start_idx = f * hop_size;
         
-        // 1. Apply windowing
-        std::vector<float> frame_data(fft_size, 0.0f);
+        // 1. Apply windowing (with mean normalization and Hamming window)
+        std::vector<float> fft_real(fft_size, 0.0f);
+        std::vector<float> fft_imag(fft_size, 0.0f);
         float mean = 0.0f;
         for (int i = 0; i < window_size; ++i) {
             mean += pcm_data[start_idx + i];
@@ -226,20 +318,15 @@ std::vector<float> ASREngine::ExtractFeatures(const std::vector<float>& pcm_data
         mean /= window_size;
 
         for (int i = 0; i < window_size; ++i) {
-            frame_data[i] = (pcm_data[start_idx + i] - mean) * window[i];
+            fft_real[i] = (pcm_data[start_idx + i] - mean) * window[i];
         }
 
-        // 2. Compute Power Spectrum (Simplified DFT representation for speed/demo safety)
+        // 2. Compute Power Spectrum using Cooley-Tukey Radix-2 FFT
+        CooleyTukeyFFT(fft_real, fft_imag);
+
         std::vector<float> power_spectrum(fft_size / 2 + 1, 0.0f);
         for (int k = 0; k <= fft_size / 2; ++k) {
-            float real = 0.0f;
-            float imag = 0.0f;
-            for (int n = 0; n < window_size; ++n) {
-                float angle = -2.0f * M_PI * k * n / fft_size;
-                real += frame_data[n] * std::cos(angle);
-                imag += frame_data[n] * std::sin(angle);
-            }
-            power_spectrum[k] = (real * real + imag * imag) / fft_size;
+            power_spectrum[k] = (fft_real[k] * fft_real[k] + fft_imag[k] * fft_imag[k]) / fft_size;
         }
 
         // 3. Apply Mel Filterbank and take Log

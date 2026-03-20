@@ -1,11 +1,11 @@
-# ⚡ EdgeDeploy-Inference: Snapdragon 8 Elite ASR
+# ⚡ EdgeDeploy-Inference: Snapdragon & Jetson Edge ASR
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Platform: Android](https://img.shields.io/badge/Platform-Android%20%7C%20Linux%20%7C%20macOS-green.svg)](#)
-[![Acceleration: QNN EP](https://img.shields.io/badge/NPU-Hexagon%20HTP%20%7C%20ANE%20%7C%20TensorRT-orange.svg)](#)
+[![Platform: Android](https://img.shields.io/badge/Platform-Android%20%7C%20Linux-green.svg)](#)
+[![Acceleration: QNN EP](https://img.shields.io/badge/NPU-Hexagon%20HTP%20%7C%20TensorRT-orange.svg)](#)
 [![Model Size: 480MB to 145MB](https://img.shields.io/badge/Model%20Compression-3.3x-brightgreen.svg)](#)
 
-An ultra-optimized on-device Automatic Speech Recognition (ASR) engine for the **IndicConformer (120M)** architecture. This repository hosts JNI/C++ code, Kotlin bindings, model optimization routines, and hardware benchmark utilities explicitly tailored for the Qualcomm **Snapdragon 8 Elite / Gen 2** Hexagon HTP NPU and Apple Silicon Neural Engine.
+An ultra-optimized on-device Automatic Speech Recognition (ASR) engine for the **IndicConformer (120M)** architecture. This repository hosts JNI/C++ code, Kotlin bindings, model optimization routines, and hardware benchmark utilities explicitly tailored for the Qualcomm **Snapdragon 8 Elite / Gen 2** Hexagon HTP NPU and **NVIDIA Jetson Orin** platforms.
 
 ---
 
@@ -20,13 +20,10 @@ graph TD
     C --> D[Calibrated ONNX Graph <br>Dynamic INT8 Calibration Cache]
     D --> E1{Qualcomm QNN HTP Compiler}
     D --> E2{NVIDIA TensorRT Optimizer}
-    D --> E3{Apple CoreML/ANE Converter}
     E1 --> F1[Serialized Context Binary <br>HTP FP16/INT8 Graph]
     E2 --> F2[TensorRT Engine <br>Structured 2:4 Sparsity]
-    E3 --> F3[CoreML Model <br>16-bit ANE Execution]
     F1 --> G[On-Device Deployable Engine <br>Compressed Size: 145MB]
     F2 --> G
-    F3 --> G
     G --> H[JNI C++ & Kotlin Engine Wrapper <br>Oryon CPU Thread Affinity]
 ```
 
@@ -44,10 +41,11 @@ The Snapdragon 8 Elite (SM8750) introduces custom **Qualcomm Oryon CPU** cores a
 - **Thread Affinity Policy**: Our JNI engine enforces hardware thread pinning (`sched_setaffinity`). Acoustic frame pre-processing (MFCC/Log-Mel spectrogram) is pinned to Oryon Performance cores to allow Prime cores to manage JNI overhead and ASR search decoding loops.
 
 ### 2. Hexagon HTP Acceleration Configurations
-Our implementation interfaces directly with the QNN Execution Provider (EP), configuring parameters optimized for Hexagon HTP hardware:
+The Hexagon Tensor Processor (HTP) inside the Hexagon NPU contains parallel scalar, vector (HVX), and tensor units. Our implementation interfaces directly with the QNN Execution Provider (EP), configuring parameters optimized for Hexagon HTP hardware:
 - **Offline Context Caching**: Compiles the ONNX graph into a hardware-specific binary context file during first-load, reducing initialization latency from 1.8 seconds to **15 milliseconds**.
 - **Voltage Corners & Power Profiles**: Forces `QNN_HTP_PERFORMANCE_MODE_BURST` and locks the DSP power rail to the high-performance voltage corner to bypass dynamic governor latency.
 - **HTP FP16 Precision**: Binds intermediate tensors to FP16 while maintaining INT8 weights, utilizing the NPU's Vector Extensions (HVX) for sub-millisecond layer calculations.
+- **Tightly Coupled Memory (TCM)**: Enables micro-tiling compiler optimizations to keep tensor activation tiles inside the Hexagon NPU's fast scratchpad RAM, avoiding slow round-trips to system DDR5 memory.
 
 ---
 
@@ -85,7 +83,6 @@ Here are the evaluation results measured using the included benchmark suite acro
 | **Snapdragon 8 Elite** | QNN HTP (Dynamic INT8) | **14.2 ms** | **18.5 ms** | 2.1 W | 0.029 J | 4.12% |
 | **Snapdragon 8 Gen 2** | QNN HTP (Static INT8) | 26.5 ms | 31.2 ms | 2.4 W | 0.063 J | 4.45% |
 | **NVIDIA Jetson Orin Nano**| TensorRT (2:4 Sparsity) | 18.1 ms | 21.0 ms | 6.8 W | 0.123 J | 4.09% |
-| **Apple M4 (iPad Pro)** | ANE CoreML (FP16) | 16.4 ms | 19.8 ms | 1.6 W | 0.026 J | 4.08% |
 | **Generic x86 CPU** | ORT CPU (FP32) | 184.0 ms | 210.0 ms | 45.0 W | 8.280 J | 4.08% |
 
 </details>
