@@ -50,9 +50,20 @@ private:
     float npu_inference_latency_ms_ = 0.0f;
 
     // ASR Vocabulary mapper for decoding token IDs to subwords/characters
+    std::string vocab_file_path_;
     std::vector<std::string> vocabulary_;
-    void LoadVocabulary();
+    void LoadVocabulary(const std::string& vocab_path);
     std::string GreedyDecode(const std::vector<int64_t>& token_ids);
+
+    // Cached Mel filterbank coefficients for fast feature extraction
+    struct MelFilterbank {
+        bool initialized = false;
+        int num_mels = 80;
+        int fft_size = 512;
+        int sample_rate = 16000;
+        std::vector<std::vector<float>> weights; // [num_mels, fft_size / 2 + 1]
+    } mel_fb_;
+    void InitializeMelFilters();
 
     bool is_initialized_ = false;
 };

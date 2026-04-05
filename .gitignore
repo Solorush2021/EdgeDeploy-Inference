@@ -1,0 +1,32 @@
+# Python files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# IDE files
+.vscode/
+.idea/
+*.suo
+*.user
+*.sln
+*.vcxproj
+*.filters
+
+# Generated assets and models
+*.onnx
+*.engine
+*.bin
+qnn_context_cache/
+
+# Build artifacts
+build/
+bin/
+lib/
+obj/
+*.so
+*.dll
+*.dylib
+*.a
+*.lib

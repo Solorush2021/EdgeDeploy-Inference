@@ -183,18 +183,59 @@ class IndicConformer120M(nn.Module):
         return logits
 
 
-def run_qat_calibration(model_path, output_path, epochs=1):
+def run_qat_calibration(output_path, checkpoint_path=None, epochs=1):
     print("Initializing IndicConformer-120M calibration pipeline...")
     
     # 1. Instantiate the Model
     model = IndicConformer120M()
+    
+    # Load pre-trained weights if checkpoint is provided
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        print(f"Loading pre-trained model weights from checkpoint: {checkpoint_path}")
+        try:
+            model.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
+            print("Successfully loaded model checkpoint.")
+        except Exception as e:
+            print(f"Warning: Failed to load checkpoint weights: {e}. Falling back to random initialization.")
+    else:
+        print("No valid checkpoint path provided. Calibrating using a randomly initialized model.")
+        
     model.train()
     
-    # 2. Configure PyTorch Eager Mode QAT preparation
-    print("Preparing model for Quantization-Aware Training (QAT)...")
-    # Using 'qnnpack' backend configuration for ARM NPU targets (compatible with QNN)
-    model.qconfig = torch.ao.quantization.get_default_qat_qconfig('qnnpack')
+    # 2. Configure PyTorch Eager Mode QAT using a custom non-fused QConfig.
+    # Non-fused MovingAverageMinMaxObserver is required for ONNX export compatibility
+    # to avoid 'aten::fused_moving_avg_obs_fake_quant' Unsupported Operator errors.
+    print("Configuring QConfig and preparing model for Quantization-Aware Training (QAT)...")
+    from torch.ao.quantization import QConfig, FakeQuantize, MovingAverageMinMaxObserver
     
+    activation_fake_quant = FakeQuantize.with_args(
+        observer=MovingAverageMinMaxObserver,
+        quant_min=0,
+        quant_max=255,
+        dtype=torch.quint8,
+        qscheme=torch.per_tensor_affine,
+        reduce_range=False
+    )
+    
+    weight_fake_quant = FakeQuantize.with_args(
+        observer=MovingAverageMinMaxObserver,
+        quant_min=-128,
+        quant_max=127,
+        dtype=torch.qint8,
+        qscheme=torch.per_tensor_symmetric,
+        reduce_range=False
+    )
+    
+    model.qconfig = QConfig(
+        activation=activation_fake_quant,
+        weight=weight_fake_quant
+    )
+    
+    # Exclude complex/unsupported layers from quantization (keep in float32 for NPU/CPU compatibility)
+    for name, module in model.named_modules():
+        if isinstance(module, (nn.LayerNorm, nn.BatchNorm1d, nn.BatchNorm2d, nn.MultiheadAttention, nn.Dropout, nn.SiLU, nn.GLU)):
+            module.qconfig = None
+            
     # Prepare model in-place (inserts observers and fake quantize modules)
     torch.ao.quantization.prepare_qat(model, inplace=True)
     
@@ -215,7 +256,6 @@ def run_qat_calibration(model_path, output_path, epochs=1):
     for epoch in range(epochs):
         total_loss = 0.0
         for i, padded_audio in enumerate(calibration_loader):
-            # unpack from collate
             audio_batch, lengths = padded_audio
             optimizer.zero_grad()
             
@@ -231,13 +271,14 @@ def run_qat_calibration(model_path, output_path, epochs=1):
             total_loss += loss.item()
             
         print(f"Calibration Epoch {epoch+1}/{epochs} | Aggregated Scale Loss: {total_loss/len(calibration_loader):.4f}")
-        
-    # Convert model to quantized state (eval mode removes fake quantize in favor of real int8 weights/scales)
+    
+    # Freeze observers before export. This prevents 'aten::copy' in-place updates 
+    # during graph tracing, resolving ONNX export failures.
+    model.apply(torch.ao.quantization.disable_observer)
     model.eval()
-    torch.ao.quantization.convert(model, inplace=True)
-    print("QAT calibration completed. Dynamic quantization configurations calculated.")
-
-    # 5. Export calibrated ONNX representation containing QDQ nodes
+    print("QAT calibration completed. Observers frozen and model placed in evaluation mode.")
+    
+    # 5. Export calibrated ONNX representation containing QDQ (Quantize-DeQuantize) nodes
     dummy_input = torch.randn(1, 200, 80)
     
     torch.onnx.export(
@@ -254,30 +295,60 @@ def run_qat_calibration(model_path, output_path, epochs=1):
             'acoustic_logits': {0: 'batch_size', 1: 'sequence_length'}
         }
     )
-    print(f"Calibrated dynamic QDQ model exported to: {output_path}")
+    print(f"Calibrated dynamic QDQ model successfully exported to: {output_path}")
+    
+    # 6. Build a standard FP32 model and export it to generate the INT8 fallback version
+    fp32_output_path = output_path.replace(".onnx", "_fp32.onnx")
+    print(f"Exporting raw FP32 model for comparison/fallback: {fp32_output_path}")
+    
+    model_fp32 = IndicConformer120M()
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        model_fp32.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
+    model_fp32.eval()
+    
+    torch.onnx.export(
+        model_fp32,
+        dummy_input,
+        fp32_output_path,
+        export_params=True,
+        opset_version=17,
+        do_constant_folding=True,
+        input_names=['speech_features'],
+        output_names=['acoustic_logits'],
+        dynamic_axes={
+            'speech_features': {0: 'batch_size', 1: 'sequence_length'},
+            'acoustic_logits': {0: 'batch_size', 1: 'sequence_length'}
+        }
+    )
  
-    # 6. Apply ONNX Runtime dynamic INT8 quantization for deployment fallback
+    # 7. Apply ONNX Runtime dynamic INT8 quantization for deployment fallback
     # Compresses Model size down from 480MB (FP32) to ~120-145MB (INT8)
     quantized_ort_path = output_path.replace(".onnx", "_int8.onnx")
     print(f"Generating optimized deployable dynamic INT8 fallback graph: {quantized_ort_path}")
     
     quantize_dynamic(
-        model_input=output_path,
+        model_input=fp32_output_path,
         model_output=quantized_ort_path,
         weight_type=QuantType.QInt8,
         op_types_to_quantize=['MatMul', 'Gemm', 'Conv']
     )
     
-    original_size = os.path.getsize(output_path) / (1024 * 1024)
+    original_size = os.path.getsize(fp32_output_path) / (1024 * 1024)
     quantized_size = os.path.getsize(quantized_ort_path) / (1024 * 1024)
+    qdq_size = os.path.getsize(output_path) / (1024 * 1024)
     print(f"FP32 Model size: {original_size:.2f} MB")
-    print(f"Quantized INT8 Model size: {quantized_size:.2f} MB (Compression: {original_size/quantized_size:.2fx})")
+    print(f"QDQ Model size: {qdq_size:.2f} MB")
+    print(f"Quantized INT8 Model size: {quantized_size:.2f} MB (Compression: {original_size/quantized_size:.2f}x)")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="QAT Calibration for IndicConformer")
     parser.add_argument("--output_path", type=str, default="indic_conformer_calibrated.onnx", help="Path to write calibrated ONNX model")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Path to pre-trained PyTorch model checkpoint (.pt/.pth)")
+    parser.add_argument("--epochs", type=int, default=1, help="Number of calibration epochs")
     args = parser.parse_args()
     
     # Create scratch output directory if needed
-    os.makedirs(os.path.dirname(os.path.abspath(args.output_path)), exist_ok=True)
-    run_qat_calibration(args.output_path, args.output_path)
+    output_dir = os.path.dirname(os.path.abspath(args.output_path))
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    run_qat_calibration(args.output_path, checkpoint_path=args.checkpoint, epochs=args.epochs)

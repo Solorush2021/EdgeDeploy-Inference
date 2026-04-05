@@ -9,7 +9,10 @@
 #include <sched.h>
 #include <unistd.h>
 #include <sys/syscall.h>
+#elif defined(_WIN32) || defined(_WIN64)
+#include <windows.h>
 #endif
+#include <fstream>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846f
@@ -88,14 +91,68 @@ void CooleyTukeyFFT(std::vector<float>& real, std::vector<float>& imag) {
 ASREngine::ASREngine() 
     : env_(ORT_LOGGING_LEVEL_WARNING, "EdgeDeployASR"),
       memory_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)) {
-    LoadVocabulary();
+    LoadVocabulary("");
 }
 
 ASREngine::~ASREngine() {
     // Session is closed automatically by the C++ wrapper
 }
 
-void ASREngine::LoadVocabulary() {
+void ASREngine::InitializeMelFilters() {
+    if (mel_fb_.initialized) return;
+    
+    mel_fb_.weights.assign(mel_fb_.num_mels, std::vector<float>(mel_fb_.fft_size / 2 + 1, 0.0f));
+    float min_mel = 0.0f;
+    float max_mel = 2595.0f * std::log10(1.0f + (mel_fb_.sample_rate / 2.0f) / 700.0f);
+
+    std::vector<float> mel_points(mel_fb_.num_mels + 2);
+    for (int i = 0; i < mel_fb_.num_mels + 2; ++i) {
+        mel_points[i] = min_mel + i * (max_mel - min_mel) / (mel_fb_.num_mels + 1);
+    }
+
+    std::vector<int> fft_bins(mel_fb_.num_mels + 2);
+    for (int i = 0; i < mel_fb_.num_mels + 2; ++i) {
+        float freq = 700.0f * (std::pow(10.0f, mel_points[i] / 2595.0f) - 1.0f);
+        fft_bins[i] = std::floor((mel_fb_.fft_size + 1) * freq / mel_fb_.sample_rate);
+    }
+
+    for (int m = 0; m < mel_fb_.num_mels; ++m) {
+        int left_bin = fft_bins[m];
+        int center_bin = fft_bins[m + 1];
+        int right_bin = fft_bins[m + 2];
+        
+        for (int k = left_bin; k < center_bin; ++k) {
+            if (center_bin != left_bin) {
+                mel_fb_.weights[m][k] = static_cast<float>(k - left_bin) / (center_bin - left_bin);
+            }
+        }
+        for (int k = center_bin; k <= right_bin; ++k) {
+            if (right_bin != center_bin) {
+                mel_fb_.weights[m][k] = static_cast<float>(right_bin - k) / (right_bin - center_bin);
+            }
+        }
+    }
+    mel_fb_.initialized = true;
+}
+
+void ASREngine::LoadVocabulary(const std::string& vocab_path) {
+    if (!vocab_path.empty()) {
+        std::ifstream infile(vocab_path);
+        if (infile.good()) {
+            vocabulary_.clear();
+            std::string line;
+            while (std::getline(infile, line)) {
+                if (!line.empty() && line.back() == '\r') {
+                    line.pop_back();
+                }
+                vocabulary_.push_back(line);
+            }
+            std::cout << "Successfully loaded vocabulary file: " << vocab_path << " (" << vocabulary_.size() << " tokens)" << std::endl;
+            return;
+        }
+        std::cerr << "Warning: Could not open vocabulary file " << vocab_path << ". Falling back to default IndicConformer vocabulary." << std::endl;
+    }
+
     // IndicConformer tokenizer vocabulary (common characters and SentencePiece subwords for Indic languages)
     vocabulary_ = {
         "<blank>", "<unk>", " ", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", 
@@ -158,6 +215,30 @@ bool ASREngine::SetThreadAffinity(const CpuAffinityConfig& config) {
         return false;
     }
     return true;
+#elif defined(_WIN32) || defined(_WIN64)
+    DWORD_PTR mask = 0;
+    if (!config.target_cores.empty()) {
+        for (int core : config.target_cores) {
+            if (core >= 0 && core < 64) {
+                mask |= (static_cast<DWORD_PTR>(1) << core);
+            }
+        }
+    } else {
+        SYSTEM_INFO sysinfo;
+        GetSystemInfo(&sysinfo);
+        int num_cores = sysinfo.dwNumberOfProcessors;
+        for (int i = std::max(0, num_cores - 4); i < num_cores; ++i) {
+            mask |= (static_cast<DWORD_PTR>(1) << i);
+        }
+    }
+    
+    HANDLE thread = GetCurrentThread();
+    DWORD_PTR result = SetThreadAffinityMask(thread, mask);
+    if (result == 0) {
+        std::cerr << "Warning: Failed to set Windows thread affinity mask. Error: " << GetLastError() << std::endl;
+        return false;
+    }
+    return true;
 #else
     std::cout << "Thread affinity binding not supported on this platform/OS." << std::endl;
     return false;
@@ -169,7 +250,11 @@ bool ASREngine::Initialize(const std::string& model_path, const QnnEPConfig& qnn
         // 1. Apply CPU Affinity for initialization thread
         SetThreadAffinity(cpu_config);
 
-        // 2. Setup Session Options
+        // 2. Load Vocabulary if custom path provided
+        vocab_file_path_ = qnn_config.vocab_file_path;
+        LoadVocabulary(vocab_file_path_);
+
+        // 3. Setup Session Options
         Ort::SessionOptions session_options;
         session_options.SetIntraOpNumThreads(cpu_config.intra_op_num_threads);
         session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
@@ -250,16 +335,18 @@ std::vector<float> ASREngine::ExtractFeatures(const std::vector<float>& pcm_data
     auto start_time = std::chrono::high_resolution_clock::now();
 
     // Constant feature dimensions for Conformer
-    const int sample_rate = 16000;
     const int fft_size = 512;
     const int hop_size = 160;   // 10ms frame stride
     const int window_size = 400; // 25ms window length
-    out_feature_dim = 80;        // 80 Mel filters
+    out_feature_dim = mel_fb_.num_mels;        // 80 Mel filters
 
     if (pcm_data.size() < static_cast<size_t>(window_size)) {
         out_seq_len = 0;
         return std::vector<float>();
     }
+
+    // Initialize mel filters (cached) if not already done
+    InitializeMelFilters();
 
     // Number of frames
     out_seq_len = 1 + (pcm_data.size() - window_size) / hop_size;
@@ -269,39 +356,6 @@ std::vector<float> ASREngine::ExtractFeatures(const std::vector<float>& pcm_data
     std::vector<float> window(window_size);
     for (int i = 0; i < window_size; ++i) {
         window[i] = 0.54f - 0.46f * std::cos(2.0f * M_PI * i / (window_size - 1));
-    }
-
-    // Pre-calculate Mel filterbank matrix (80 filters) using correct interpolation
-    std::vector<std::vector<float>> mel_filters(out_feature_dim, std::vector<float>(fft_size / 2 + 1, 0.0f));
-    float min_mel = 0.0f;
-    float max_mel = 2595.0f * std::log10(1.0f + (sample_rate / 2.0f) / 700.0f);
-
-    std::vector<float> mel_points(out_feature_dim + 2);
-    for (int i = 0; i < out_feature_dim + 2; ++i) {
-        mel_points[i] = min_mel + i * (max_mel - min_mel) / (out_feature_dim + 1);
-    }
-
-    std::vector<int> fft_bins(out_feature_dim + 2);
-    for (int i = 0; i < out_feature_dim + 2; ++i) {
-        float freq = 700.0f * (std::pow(10.0f, mel_points[i] / 2595.0f) - 1.0f);
-        fft_bins[i] = std::floor((fft_size + 1) * freq / sample_rate);
-    }
-
-    for (int m = 0; m < out_feature_dim; ++m) {
-        int left_bin = fft_bins[m];
-        int center_bin = fft_bins[m + 1];
-        int right_bin = fft_bins[m + 2];
-        
-        for (int k = left_bin; k < center_bin; ++k) {
-            if (center_bin != left_bin) {
-                mel_filters[m][k] = static_cast<float>(k - left_bin) / (center_bin - left_bin);
-            }
-        }
-        for (int k = center_bin; k <= right_bin; ++k) {
-            if (right_bin != center_bin) {
-                mel_filters[m][k] = static_cast<float>(right_bin - k) / (right_bin - center_bin);
-            }
-        }
     }
 
     // Process each frame
@@ -329,11 +383,11 @@ std::vector<float> ASREngine::ExtractFeatures(const std::vector<float>& pcm_data
             power_spectrum[k] = (fft_real[k] * fft_real[k] + fft_imag[k] * fft_imag[k]) / fft_size;
         }
 
-        // 3. Apply Mel Filterbank and take Log
+        // 3. Apply Cached Mel Filterbank and take Log
         for (int m = 0; m < out_feature_dim; ++m) {
             float energy = 0.0f;
             for (int k = 0; k <= fft_size / 2; ++k) {
-                energy += power_spectrum[k] * mel_filters[m][k];
+                energy += power_spectrum[k] * mel_fb_.weights[m][k];
             }
             // Floor energy to avoid log(0)
             energy = std::max(energy, 1e-10f);

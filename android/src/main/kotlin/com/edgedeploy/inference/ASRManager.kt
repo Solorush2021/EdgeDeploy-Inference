@@ -43,7 +43,8 @@ class ASRManager(
         val enableContextCaching: Boolean = true,
         val contextCacheDir: String = "/data/local/tmp/qnn_context_cache",
         val targetCpuCores: IntArray? = intArrayOf(6, 7), // Snapdragon 8 Elite Prime cores by default
-        val intraThreadsCount: Int = 4
+        val intraThreadsCount: Int = 4,
+        val vocabPath: String = ""
     )
 
     private var nativeEngineHandle: Long = 0
@@ -58,7 +59,8 @@ class ASRManager(
             enableContextCaching = config.enableContextCaching,
             cacheDir = config.contextCacheDir,
             cpuCores = config.targetCpuCores,
-            intraThreads = config.intraThreadsCount
+            intraThreads = config.intraThreadsCount,
+            vocabPath = config.vocabPath
         )
         if (nativeEngineHandle == 0L) {
             throw IllegalStateException("Failed to initialize native ASR Engine.")
@@ -122,7 +124,8 @@ class ASRManager(
         enableContextCaching: Boolean,
         cacheDir: String,
         cpuCores: IntArray?,
-        intraThreads: Int
+        intraThreads: Int,
+        vocabPath: String
     ): Long
 
     private native fun nativeTranscribe(engineHandle: Long, audioData: FloatArray): String

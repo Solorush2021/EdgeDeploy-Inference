@@ -43,6 +43,9 @@ struct QnnEPConfig {
     // Qualcomm QNN HTP power configurations
     uint32_t dsp_voltage_corner = 2; // High-performance corner (Hvx/HTP voltage)
     uint32_t rpc_latency_us = 0;     // Minimum RPC latency for ultra-low latency execution
+
+    // Dynamic configuration paths
+    std::string vocab_file_path = ""; // Custom vocabulary file path for token-to-text mapping
 };
 
 // Snapdragon Oryon CPU Cluster Configurations

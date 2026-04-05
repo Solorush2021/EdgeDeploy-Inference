@@ -78,17 +78,17 @@ class IndicConformerINT8Calibrator(trt.IInt8EntropyCalibrator2):
         self.cache_file = cache_file
         self.current_index = 0
         
-        # Pre-generate representative calibration inputs [Count, Batch, SeqLen, Features]
+        # Pre-generate representative calibration inputs [Count, Batch, SeqLen (300), Features (80)]
         self.input_data = []
         for _ in range(calibration_data_count):
-            # Dynamic length of frames
-            seq_len = np.random.randint(150, 450)
-            data = np.random.randn(self.batch_size, seq_len, 80).astype(np.float32) * 2.0 - 3.5
+            # Fixed sequence length (300 frames) representing standard 3s audio clips 
+            # to ensure consistent, stable calibration tensor layouts.
+            data = np.random.randn(self.batch_size, 300, 80).astype(np.float32) * 2.0 - 3.5
             self.input_data.append(data)
             
         # Allocate device buffer
         if TRT_AVAILABLE and cuda is not None:
-            self.max_bytes = self.batch_size * 450 * 80 * 4
+            self.max_bytes = self.batch_size * 300 * 80 * 4
             self.device_input = cuda.mem_alloc(self.max_bytes)
         else:
             self.device_input = None

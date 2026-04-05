@@ -28,7 +28,8 @@ Java_com_edgedeploy_inference_ASRManager_nativeInit(
     jboolean enable_context_caching,
     jstring cache_dir,
     jintArray cpu_cores,
-    jint intra_threads
+    jint intra_threads,
+    jstring vocab_path
 ) {
     ASREngine* engine = new ASREngine();
     
@@ -37,6 +38,7 @@ Java_com_edgedeploy_inference_ASRManager_nativeInit(
     qnn_config.use_htp_fp16_precision = use_htp_fp16;
     qnn_config.enable_context_caching = enable_context_caching;
     qnn_config.context_cache_dir = jstring2string(env, cache_dir);
+    qnn_config.vocab_file_path = jstring2string(env, vocab_path);
     
     switch (performance_profile) {
         case 0: qnn_config.perf_profile = PerformanceProfile::LOW_POWER; break;

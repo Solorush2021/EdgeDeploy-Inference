@@ -38,8 +38,7 @@ target_link_libraries(edgedeploy_asr
 if(ANDROID)
     target_compile_options(edgedeploy_asr PRIVATE
         -O3
-        -mfloat-abi=softfp
-        -mfpu=neon-vfpv4
+        -march=armv8-a+simd
         -ffast-math
         -flto
     )

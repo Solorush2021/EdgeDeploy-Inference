@@ -123,32 +123,66 @@ def run_benchmark(platform_type, iterations=100):
 
     telemetry = PowerTelemetry(platform_type)
 
+    # Detect if actual ONNX model is available for benchmark
+    model_paths = [
+        "indic_conformer_calibrated.onnx",
+        "indic_conformer_calibrated_int8.onnx",
+        "../indic_conformer_calibrated.onnx",
+        "../indic_conformer_calibrated_int8.onnx"
+    ]
+    model_path = None
+    for p in model_paths:
+        if os.path.exists(p):
+            model_path = p
+            break
+
+    session = None
+    if model_path:
+        try:
+            import onnxruntime as ort
+            session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+            print(f"Found active calibrated model: {model_path}")
+            print("ONNX Runtime session initialized. Running actual model inference for benchmark...")
+        except Exception as e:
+            print(f"Warning: Found model at {model_path} but could not initialize ORT Session: {e}")
+            print("Falling back to simulated graph computation.")
+
     # 1. Warm-up Iterations (JIT / QNN context compilation loading)
     print("Warming up compute accelerators and cache layers...")
     for _ in range(5):
-        # Simulated log-mel audio input sequence (e.g. 300 frames = 3 seconds of speech)
-        dummy_audio = np.random.randn(300, 80).astype(np.float32)
-        _ = np.dot(dummy_audio, np.random.randn(80, 80)) # Simulated graph ops
+        dummy_audio = np.random.randn(1, 300, 80).astype(np.float32)
+        if session:
+            input_name = session.get_inputs()[0].name
+            _ = session.run(None, {input_name: dummy_audio})
+        else:
+            dummy_feat = np.random.randn(300, 80).astype(np.float32)
+            _ = np.dot(dummy_feat, np.random.randn(80, 80)) # Simulated graph ops
         time.sleep(0.02)
 
     # 2. Performance & Power Sampling Loop
     print(f"Executing {iterations} inference evaluation loops...")
     latencies = []
     power_samples = []
+    last_raw_logits = None
 
     for idx in range(iterations):
         # Generate dynamic audio length (simulating variable user utterances from 2s to 8s)
         seq_len = np.random.randint(200, 800)
-        speech_feat = np.random.randn(seq_len, 80).astype(np.float32)
-
+        
         start_time = time.perf_counter()
         
-        # Simulate neural operations (Encoder self-attention projections)
-        # Represents compute intensity of IndicConformer layers
-        q = np.dot(speech_feat, np.random.randn(80, 256))
-        k = np.dot(speech_feat, np.random.randn(80, 256))
-        scores = np.dot(q, k.T) / np.sqrt(256)
-        _ = np.dot(scores, np.random.randn(seq_len, 90)) # project to vocabulary size
+        if session:
+            input_name = session.get_inputs()[0].name
+            speech_feat = np.random.randn(1, seq_len, 80).astype(np.float32)
+            outputs = session.run(None, {input_name: speech_feat})
+            last_raw_logits = outputs[0]
+        else:
+            # Simulate neural operations (Encoder self-attention projections)
+            speech_feat = np.random.randn(seq_len, 80).astype(np.float32)
+            q = np.dot(speech_feat, np.random.randn(80, 256))
+            k = np.dot(speech_feat, np.random.randn(80, 256))
+            scores = np.dot(q, k.T) / np.sqrt(256)
+            _ = np.dot(scores, np.random.randn(seq_len, 90))
         
         end_time = time.perf_counter()
         latency_ms = (end_time - start_time) * 1000.0
@@ -162,7 +196,36 @@ def run_benchmark(platform_type, iterations=100):
 
     # 3. Accuracy Evaluation
     reference = "अतुल्य भारत में आपका स्वागत है और आज हम तकनीक का प्रदर्शन कर रहे हैं"
-    hypothesis = "अतुल्य भारत में आपका स्वागत है और आज हम तकनीकी का प्रदर्शन कर रहे हैं"
+    
+    # Vocabulary mapper (matching the C++ vocabulary size of 900+ subwords)
+    vocab = [
+        "<blank>", "<unk>", " ", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", 
+        "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "अ", "आ", "इ", "ई", "उ", 
+        "ऊ", "ऋ", "ए", "ऐ", "ओ", "औ", "क", "ख", "ग", "घ", "ङ", "च", "छ", "ज", "झ", "ञ", "ट", "ठ", 
+        "ड", "ढ", "ण", "त", "थ", "द", "ध", "न", "प", "फ", "ब", "भ", "म", "य", "र", "ल", "व", "श", 
+        "ष", "स", "ह", "ा", "ि", "ी", "ु", "ू", "ृ", "े", "ै", "ो", "ौ", "्", "ं", "ः", "ँ"
+    ]
+    for i in range(900):
+        if len(vocab) <= i:
+            vocab.append(f"[subword_{i}]")
+
+    if session and last_raw_logits is not None:
+        # Decode the last run's logits using CTC Greedy Search
+        # last_raw_logits shape: [1, seq_len, vocab_size]
+        token_ids = np.argmax(last_raw_logits[0], axis=-1)
+        decoded_tokens = []
+        prev_token = -1
+        for token_id in token_ids:
+            if token_id != 0 and token_id != prev_token:
+                if token_id < len(vocab):
+                    decoded_tokens.append(vocab[token_id])
+            prev_token = token_id
+        hypothesis = "".join(decoded_tokens)
+        if not hypothesis:
+            hypothesis = "<empty_transcription>"
+    else:
+        # Fallback simulated hypothesis
+        hypothesis = "अतुल्य भारत में आपका स्वागत है और आज हम तकनीकी का प्रदर्शन कर रहे हैं"
     
     wer = compute_wer(reference, hypothesis)
     cer = compute_cer(reference, hypothesis)
@@ -179,6 +242,7 @@ def run_benchmark(platform_type, iterations=100):
 
     # Output details
     print("\n" + "-" * 30 + " BENCHMARK RESULTS " + "-" * 30)
+    print(f"Model File Evaluated: {model_path if model_path else 'Simulation Mode (No ONNX model detected)'}")
     print(f"Latency:")
     print(f"  - Average Latency: {avg_latency:.2f} ms")
     print(f"  - p50 (Median)   : {p50:.2f} ms")
