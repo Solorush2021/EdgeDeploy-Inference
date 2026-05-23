@@ -117,6 +117,133 @@ graph LR
     DDR["System LPDDR5X Memory"] <==>|Slow DMA Transfer| TCM
 ```
 
+### 5. Low-Latency Audio Capture Scheduling via `SCHED_FIFO`
+
+<details>
+<summary>🔍 Click to expand: Audio Capture Thread Scheduling & Preemption Analysis</summary>
+
+For real-time ASR, missing a single 10ms frame of microphone data leads to transcription glitches and phonetic distortion (especially for code-mixed languages like Hinglish). To prevent this under heavy NPU/CPU workloads, the audio acquisition thread must be designated as a real-time thread using Linux's `SCHED_FIFO` scheduling policy:
+
+$$\text{Thread Priority} \in [1, 99]$$
+
+Standard scheduling (`SCHED_OTHER`) uses dynamic priority recalculation based on nice values:
+
+$$\text{Priority}_{\text{dynamic}} = f(\text{nice}, \text{CPU Usage})$$
+
+In contrast, `SCHED_FIFO` uses absolute priority. A thread running with `SCHED_FIFO` and priority $p$ will immediately preempt any threads running with lower real-time priorities or standard scheduling:
+
+$$\forall \text{ thread } T_i, \text{ if } \text{Scheduler}(T_i) = \text{SCHED\_FIFO} \text{ and } \text{Priority}(T_i) > \text{Priority}(T_{\text{running}}), \text{ Preempt}(T_{\text{running}})$$
+
+#### Preemption Sequence Diagram:
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Mic as Audio Hardware / DMA
+    participant AudioThread as Audio Capture Thread (SCHED_FIFO, Priority 99)
+    participant Kernel as Linux Scheduler
+    participant CPU as Oryon CPU / NPU
+    participant ASRThread as ASR Inference Thread (SCHED_OTHER, Nice 0)
+
+    ASRThread->>CPU: Running Conformer forward pass (Compute intensive)
+    Mic->>AudioThread: Interrupt: Audio buffer filled (16kHz, 10ms frame)
+    AudioThread->>Kernel: Request CPU execution
+    Kernel->>Kernel: Compare scheduler policies and priorities
+    Note over Kernel: AudioThread is SCHED_FIFO (99) > ASRThread SCHED_OTHER (0)
+    Kernel->>ASRThread: Preempt (Suspend Execution)
+    Kernel->>AudioThread: Dispatch immediately to CPU
+    AudioThread->>AudioThread: Read PCM, write to Ring Buffer
+    AudioThread->>ASRThread: Yield/Sleep (Wait for next interrupt)
+    Kernel->>ASRThread: Resume Conformer Inference on CPU
+```
+</details>
+
+### 6. Qualcomm QNN EP Memory Architecture & Voltage Rails
+
+<details>
+<summary>💾 Click to expand: Memory Layout, Ion Allocator, and HTP Voltage Specifications</summary>
+
+Qualcomm QNN HTP (Hexagon Tensor Processor) achieves zero-copy memory transfers between the main CPU application memory and NPU local SRAM using **ION/dmabuf shared memory allocators**. 
+
+#### FastRPC Zero-Copy Buffer Mapping:
+Standard memory allocations (`malloc` or `std::vector`) reside in virtual memory. Accessing them from the HTP requires a memory copy across the FastRPC bus. 
+By allocating memory using ION/Shared Memory APIs, we obtain a file descriptor (`fd`) representing physically contiguous (or IOMMU-mapped) memory pages. The HTP's DMA engine accesses these pages directly:
+
+```mermaid
+graph LR
+    subgraph CPU Host Space
+        A["Standard Heap Alloc (Virtual Memory)"] -- "Requires memcpy (FastRPC)" --> B["ION / Shared Memory Allocator"]
+    end
+    subgraph Hexagon HTP Space
+        B -->|Zero-Copy DMA| C["Tightly Coupled Memory (TCM / L1 SRAM)"]
+        C -->|Tiled Activations| D["HTP Vector Engines (HVX)"]
+    end
+    style B fill:#f9f,stroke:#333,stroke-width:2px
+    style C fill:#9f9,stroke:#333,stroke-width:2px
+```
+
+#### HTP Voltage Corners and Dynamic Clock & Voltage Scaling (DCVS):
+HTP clock rates and voltage rails are controlled by DCVS. High-throughput speech inference requires locking these rails to prevent clock-downthrottling:
+
+- **`dsp_voltage_corner`**: Controls Hexagon core voltage. Level `2` corresponds to `HIGH_PERFORMANCE`, while `1` corresponds to `BALANCED`. Burst mode or peak execution leverages higher corners (e.g., `4` or `5` on newer platforms).
+- **`rpc_control_latency`**: Configures CPU sleep states. Setting it to `0` prevents FastRPC from entering low-power mode, bypassing the wake-up penalty of $\approx 250\mu\text{s}$ per inference call.
+
+Let the total FastRPC latency $L_{\text{rpc}}$ be modeled as:
+
+$$L_{\text{rpc}} = T_{\text{dma}} + T_{\text{wake\_up}} + T_{\text{execute}}$$
+
+By setting `rpc_control_latency` to `0`, we force $T_{\text{wake\_up}} \to 0$, ensuring deterministic real-time processing:
+
+$$L_{\text{rpc}} \approx T_{\text{dma}} + T_{\text{execute}}$$
+
+</details>
+
+### 7. Quantization & Calibration Strategy for Code-Mixed Hinglish ASR
+
+<details>
+<summary>🎯 Click to expand: Dynamic vs Static Quantization & Attention Layer Protection</summary>
+
+Code-mixed languages (such as Hinglish—Hindi mixed with English words in Latin or Devanagari script) exhibit highly unique phonetic transitions and attention patterns. In the Conformer architecture, the Multi-Head Self-Attention (MHSA) blocks capture these context dependencies:
+
+$$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{Q K^T}{\sqrt{d_k}}\right) V$$
+
+When quantizing the model to INT8 for NPU acceleration, choosing between **Static** and **Dynamic** quantization represents a critical trade-off between latency and Word Error Rate (WER) degradation:
+
+#### Quantization Paradigm Comparison:
+
+| Feature / Metric | Static Post-Training Quantization (PTQ) | Dynamic Quantization |
+| :--- | :--- | :--- |
+| **Quantization Parameters** | Pre-computed scales $s$ and zero-points $z$ using calibration dataset. | Calculated on-the-fly at runtime per activation tensor. |
+| **HTP NPU Support** | Fully accelerated (runs entirely in INT8 engines). | Partial/Fallback to CPU or HVX FP16 (higher overhead). |
+| **Hinglish Softmax Accuracy** | Low. Standard calibration datasets fail to capture the wide dynamic range of code-mixed attention matrices, leading to clipping. | High. The dynamic range is computed per-inference, avoiding precision loss in attention heads. |
+| **Acoustic Feature Extraction** | Static range mapping is vulnerable to speaker volume and ambient noise changes. | Adapts dynamically to different voice amplitudes. |
+
+#### Mathematical Impact of Static Quantization on Softmax:
+Let the attention weights before softmax be $z_i = \frac{Q_i K^T}{\sqrt{d_k}}$. The standard softmax computes:
+
+$$\alpha_i = \frac{e^{z_i}}{\sum_{j} e^{z_j}}$$
+
+Under static quantization with a coarse scale $s$, the quantized inputs $\hat{z}_i = \text{round}(z_i / s) \cdot s$ suffer from rounding error $\epsilon_i = \hat{z}_i - z_i$. The perturbed attention weights $\hat{\alpha}_i$ become:
+
+$$\hat{\alpha}_i = \frac{e^{z_i + \epsilon_i}}{\sum_{j} e^{z_j + \epsilon_j}}$$
+
+Since softmax is highly non-linear, small quantization noise $\epsilon_i$ in the exponent propagates exponentially, causing attention heads to focus on garbage/blank tokens or entirely drop Hinglish keyword relationships.
+
+#### Hybrid Quantization Flow (Selective Precision):
+To preserve Hinglish attention context without sacrificing NPU performance, we implement a **hybrid calibration configuration**:
+1. **Convolution and Feed-Forward (FFN) Blocks**: Quantized to **Static INT8** to leverage the massive MAC throughput of the Hexagon HTP.
+2. **Softmax and Multi-Head Attention Projection Layers**: Maintained in **FP16 / Dynamic INT8** to protect the high-entropy attention distributions from quantization noise.
+
+```mermaid
+graph TD
+    Input["Input Acoustic Features"] --> Conv["Convolution Blocks (Static INT8)"]
+    Conv --> Proj["Attention Projections Q/K/V (Dynamic INT8/FP16)"]
+    Proj --> Softmax["Softmax Scoring (FP16 Precision)"]
+    Softmax --> Attn["Attention Output Matrix (Dynamic INT8)"]
+    Attn --> FFN["Feed-Forward Blocks (Static INT8)"]
+    FFN --> Output["Output Token Logits"]
+```
+</details>
+
 ---
 
 ## 🧮 Mathematical Formulation

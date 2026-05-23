@@ -24,6 +24,9 @@ public:
     // Explicit thread affinity binding helper targeting Snapdragon Oryon/Kryo CPU cluster configurations
     static bool SetThreadAffinity(const CpuAffinityConfig& config);
 
+    // Sets the calling thread's scheduler to SCHED_FIFO with the given priority
+    static bool SetAudioThreadPriority(int priority);
+
     // Returns latency metrics from the last inference run in milliseconds
     float GetLastInferenceLatencyMs() const { return last_inference_latency_ms_; }
     float GetFeatureExtractionLatencyMs() const { return feat_extraction_latency_ms_; }

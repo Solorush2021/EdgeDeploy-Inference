@@ -245,6 +245,25 @@ bool ASREngine::SetThreadAffinity(const CpuAffinityConfig& config) {
 #endif
 }
 
+bool ASREngine::SetAudioThreadPriority(int priority) {
+#if defined(__ANDROID__) || defined(__linux__)
+    struct sched_param param;
+    param.sched_priority = priority;
+    // Set scheduling policy to SCHED_FIFO for the calling thread
+    int result = sched_setscheduler(0, SCHED_FIFO, &param);
+    if (result != 0) {
+        std::cerr << "Warning: Failed to set audio thread priority to SCHED_FIFO (priority: " 
+                  << priority << "). Error: " << errno << " (requires appropriate permissions/capabilities)." << std::endl;
+        return false;
+    }
+    std::cout << "Successfully set thread scheduler to SCHED_FIFO with priority: " << priority << std::endl;
+    return true;
+#else
+    std::cout << "Thread priority configuration (SCHED_FIFO) is not supported on this platform/OS." << std::endl;
+    return false;
+#endif
+}
+
 bool ASREngine::Initialize(const std::string& model_path, const QnnEPConfig& qnn_config, const CpuAffinityConfig& cpu_config) {
     try {
         // 1. Apply CPU Affinity for initialization thread
@@ -261,6 +280,14 @@ bool ASREngine::Initialize(const std::string& model_path, const QnnEPConfig& qnn
 
         // 3. Configure QNN Execution Provider options
         auto qnn_options = GetQnnEpOptions(qnn_config);
+        
+        // Explicitly set dynamic QNN EP power and latency configurations in Initialize
+        qnn_options["htp_voltage_corner"] = std::to_string(qnn_config.dsp_voltage_corner);
+        qnn_options["rpc_control_latency"] = std::to_string(qnn_config.rpc_latency_us);
+        
+        std::cout << "[ASREngine] Configured QNN EP with htp_voltage_corner=" 
+                  << qnn_config.dsp_voltage_corner 
+                  << " and rpc_control_latency=" << qnn_config.rpc_latency_us << std::endl;
         
         std::vector<const char*> keys;
         std::vector<const char*> values;
