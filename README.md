@@ -689,3 +689,288 @@ To execute the accuracy, latency, and power benchmark suite:
 # Auto-detects target platform and samples telemetry data
 python3 benchmark/benchmark_suite.py --platform auto --runs 100
 ```
+
+
+---
+
+## 🌍 Supported Platforms, Languages & Pre-trained Models
+
+<details>
+<summary>🌐 Click to expand: Official Sherpa-ONNX Supported API Bindings & Models list</summary>
+
+### Supported platforms
+
+|Architecture| Android | iOS     | Windows    | macOS | linux | HarmonyOS |
+|------------|---------|---------|------------|-------|-------|-----------|
+|   x64      |  ✔️      |         |   ✔️      | ✔️    |  ✔️    |   ✔️   |
+|   x86      |  ✔️      |         |   ✔️      |       |        |        |
+|   arm64    |  ✔️      | ✔️      |   ✔️      | ✔️    |  ✔️    |   ✔️   |
+|   arm32    |  ✔️      |         |           |       |  ✔️    |   ✔️   |
+|   riscv64  |          |         |           |       |  ✔️    |        |
+
+### Supported programming languages
+
+| 1. C++ | 2. C  | 3. Python | 4. JavaScript |
+|--------|-------|-----------|---------------|
+|   ✔️    | ✔️     | ✔️         |    ✔️          |
+
+|5. Java | 6. C# | 7. Kotlin | 8. Swift |
+|--------|-------|-----------|----------|
+| ✔️      |  ✔️    | ✔️         |  ✔️       |
+
+| 9. Go | 10. Dart | 11. Rust | 12. Pascal |
+|-------|----------|----------|------------|
+| ✔️     |  ✔️       |   ✔️      |    ✔️       |
+
+
+It also supports WebAssembly.
+
+### Supported NPUs
+
+| [1. Rockchip NPU (RKNN)][rknpu-doc] | [2. Qualcomm NPU (QNN)][qnn-doc]  | [3. Ascend NPU][ascend-doc] |
+|-------------------------------------|-----------------------------------|-----------------------------|
+|     ✔️                              |                  ✔️               |     ✔️                      |
+
+| [4. Axera NPU][axera-npu] |
+|---------------------------|
+|     ✔️                    |
+
+[Join our discord](https://discord.gg/fJdxzg2VbG)
+
+
+## Introduction
+
+This repository supports running the following functions **locally**
+
+  - Speech-to-text (i.e., ASR); both streaming and non-streaming are supported
+  - Text-to-speech (i.e., TTS)
+  - Speaker diarization
+  - Speaker identification
+  - Speaker verification
+  - Spoken language identification
+  - Audio tagging
+  - VAD (e.g., [silero-vad][silero-vad])
+  - Speech enhancement (e.g., [gtcrn][gtcrn], [DPDFNet](https://github.com/ceva-ip/DPDFNet))
+  - Keyword spotting
+  - Source separation (e.g., [spleeter][spleeter], [UVR][UVR])
+
+on the following platforms and operating systems:
+
+  - x86, ``x86_64``, 32-bit ARM, 64-bit ARM (arm64, aarch64), RISC-V (riscv64), **RK NPU**, **Ascend NPU**
+  - Linux, macOS, Windows, openKylin
+  - Android, WearOS
+  - iOS
+  - HarmonyOS
+  - NodeJS
+  - WebAssembly
+  - [NVIDIA Jetson Orin NX][NVIDIA Jetson Orin NX] (Support running on both CPU and GPU)
+  - [NVIDIA Jetson Nano B01][NVIDIA Jetson Nano B01] (Support running on both CPU and GPU)
+  - [Raspberry Pi][Raspberry Pi]
+  - [RV1126][RV1126]
+  - [LicheePi4A][LicheePi4A]
+  - [VisionFive 2][VisionFive 2]
+  - [旭日X3派][旭日X3派]
+  - [爱芯派][爱芯派]
+  - [RK3588][RK3588]
+  - [SpacemiT-K1][SpacemiT-K1]
+  - [SpacemiT-K3][SpacemiT-K3]
+  - etc
+
+with the following APIs
+
+  - C++, C, Python, Go, ``C#``
+  - Java, Kotlin, JavaScript
+  - Swift, Rust
+  - Dart, Object Pascal
+
+### Links for Huggingface Spaces
+
+<details>
+<summary>You can visit the following Huggingface spaces to try sherpa-onnx without
+installing anything. All you need is a browser.</summary>
+
+| Description                                           | URL                                     | 中国镜像                               |
+|-------------------------------------------------------|-----------------------------------------|----------------------------------------|
+| Speaker diarization                                   | [Click me][hf-space-speaker-diarization]| [镜像][hf-space-speaker-diarization-cn]|
+| Speech recognition                                    | [Click me][hf-space-asr]                | [镜像][hf-space-asr-cn]                |
+| Speech recognition with [Whisper][Whisper]            | [Click me][hf-space-asr-whisper]        | [镜像][hf-space-asr-whisper-cn]        |
+| Speech synthesis                                      | [Click me][hf-space-tts]                | [镜像][hf-space-tts-cn]                |
+| Generate subtitles                                    | [Click me][hf-space-subtitle]           | [镜像][hf-space-subtitle-cn]           |
+| Audio tagging                                         | [Click me][hf-space-audio-tagging]      | [镜像][hf-space-audio-tagging-cn]      |
+| Source separation                                     | [Click me][hf-space-source-separation]  | [镜像][hf-space-source-separation-cn]  |
+| Spoken language identification with [Whisper][Whisper]| [Click me][hf-space-slid-whisper]       | [镜像][hf-space-slid-whisper-cn]       |
+
+We also have spaces built using WebAssembly. They are listed below:
+
+| Description                                                                              | Huggingface space| ModelScope space|
+|------------------------------------------------------------------------------------------|------------------|-----------------|
+|Voice activity detection with [silero-vad][silero-vad]                                    | [Click me][wasm-hf-vad]|[地址][wasm-ms-vad]|
+|Real-time speech recognition (Chinese + English) with Zipformer                           | [Click me][wasm-hf-streaming-asr-zh-en-zipformer]|[地址][wasm-hf-streaming-asr-zh-en-zipformer]|
+|Real-time speech recognition (Chinese + English) with Paraformer                          |[Click me][wasm-hf-streaming-asr-zh-en-paraformer]| [地址][wasm-ms-streaming-asr-zh-en-paraformer]|
+|Real-time speech recognition (Chinese + English + Cantonese) with [Paraformer-large][Paraformer-large]|[Click me][wasm-hf-streaming-asr-zh-en-yue-paraformer]| [地址][wasm-ms-streaming-asr-zh-en-yue-paraformer]|
+|Real-time speech recognition (English) |[Click me][wasm-hf-streaming-asr-en-zipformer]    |[地址][wasm-ms-streaming-asr-en-zipformer]|
+|VAD + speech recognition (Chinese) with [Zipformer CTC](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-ctc/icefall/zipformer.html#sherpa-onnx-zipformer-ctc-zh-int8-2025-07-03-chinese)|[Click me][wasm-hf-vad-asr-zh-zipformer-ctc-07-03]| [地址][wasm-ms-vad-asr-zh-zipformer-ctc-07-03]|
+|VAD + speech recognition (Chinese + English + Korean + Japanese + Cantonese) with [SenseVoice][SenseVoice]|[Click me][wasm-hf-vad-asr-zh-en-ko-ja-yue-sense-voice]| [地址][wasm-ms-vad-asr-zh-en-ko-ja-yue-sense-voice]|
+|VAD + speech recognition (English) with [Whisper][Whisper] tiny.en|[Click me][wasm-hf-vad-asr-en-whisper-tiny-en]| [地址][wasm-ms-vad-asr-en-whisper-tiny-en]|
+|VAD + speech recognition (English) with [Moonshine tiny][Moonshine tiny]|[Click me][wasm-hf-vad-asr-en-moonshine-tiny-en]| [地址][wasm-ms-vad-asr-en-moonshine-tiny-en]|
+|VAD + speech recognition (English) with Zipformer trained with [GigaSpeech][GigaSpeech]    |[Click me][wasm-hf-vad-asr-en-zipformer-gigaspeech]| [地址][wasm-ms-vad-asr-en-zipformer-gigaspeech]|
+|VAD + speech recognition (Chinese) with Zipformer trained with [WenetSpeech][WenetSpeech]  |[Click me][wasm-hf-vad-asr-zh-zipformer-wenetspeech]| [地址][wasm-ms-vad-asr-zh-zipformer-wenetspeech]|
+|VAD + speech recognition (Japanese) with Zipformer trained with [ReazonSpeech][ReazonSpeech]|[Click me][wasm-hf-vad-asr-ja-zipformer-reazonspeech]| [地址][wasm-ms-vad-asr-ja-zipformer-reazonspeech]|
+|VAD + speech recognition (Thai) with Zipformer trained with [GigaSpeech2][GigaSpeech2]      |[Click me][wasm-hf-vad-asr-th-zipformer-gigaspeech2]| [地址][wasm-ms-vad-asr-th-zipformer-gigaspeech2]|
+|VAD + speech recognition (Chinese 多种方言) with a [TeleSpeech-ASR][TeleSpeech-ASR] CTC model|[Click me][wasm-hf-vad-asr-zh-telespeech]| [地址][wasm-ms-vad-asr-zh-telespeech]|
+|VAD + speech recognition (English + Chinese, 及多种中文方言) with Paraformer-large          |[Click me][wasm-hf-vad-asr-zh-en-paraformer-large]| [地址][wasm-ms-vad-asr-zh-en-paraformer-large]|
+|VAD + speech recognition (English + Chinese, 及多种中文方言) with Paraformer-small          |[Click me][wasm-hf-vad-asr-zh-en-paraformer-small]| [地址][wasm-ms-vad-asr-zh-en-paraformer-small]|
+|VAD + speech recognition (多语种及多种中文方言) with [Dolphin][Dolphin]-base          |[Click me][wasm-hf-vad-asr-multi-lang-dolphin-base]| [地址][wasm-ms-vad-asr-multi-lang-dolphin-base]|
+|Speech synthesis (Piper, English)                                                                  |[Click me][wasm-hf-tts-piper-en]| [地址][wasm-ms-tts-piper-en]|
+|Speech synthesis (Piper, German)                                                                   |[Click me][wasm-hf-tts-piper-de]| [地址][wasm-ms-tts-piper-de]|
+|Speech synthesis (Matcha, Chinese)                                                                  |[Click me][wasm-hf-tts-matcha-zh]| [地址][wasm-ms-tts-matcha-zh]|
+|Speech synthesis (Matcha, English)                                                                  |[Click me][wasm-hf-tts-matcha-en]| [地址][wasm-ms-tts-matcha-en]|
+|Speech synthesis (Matcha, Chinese+English)                                                          |[Click me][wasm-hf-tts-matcha-zh-en]| [地址][wasm-ms-tts-matcha-zh-en]|
+|Speaker diarization                                                                         |[Click me][wasm-hf-speaker-diarization]|[地址][wasm-ms-speaker-diarization]|
+|Voice cloning with ZipVoice (Chinese+English)                                               |[Click me][wasm-hf-voice-cloning-zipvoice]|[地址][wasm-ms-voice-cloning-zipvoice]|
+|Voice cloning with Pocket TTS (English)                                               |[Click me][wasm-hf-voice-cloning-pocket]|[地址][wasm-ms-voice-cloning-pocket]|
+
+</details>
+
+### Links for pre-built Android APKs
+
+<details>
+
+<summary>You can find pre-built Android APKs for this repository in the following table</summary>
+
+| Description                            | URL                                | 中国用户                          |
+|----------------------------------------|------------------------------------|-----------------------------------|
+| Speaker diarization                    | [Address][apk-speaker-diarization] | [点此][apk-speaker-diarization-cn]|
+| Streaming speech recognition           | [Address][apk-streaming-asr]       | [点此][apk-streaming-asr-cn]      |
+| Simulated-streaming speech recognition | [Address][apk-simula-streaming-asr]| [点此][apk-simula-streaming-asr-cn]|
+| Text-to-speech                         | [Address][apk-tts]                 | [点此][apk-tts-cn]                |
+| Voice activity detection (VAD)         | [Address][apk-vad]                 | [点此][apk-vad-cn]                |
+| VAD + non-streaming speech recognition | [Address][apk-vad-asr]             | [点此][apk-vad-asr-cn]            |
+| Two-pass speech recognition            | [Address][apk-2pass]               | [点此][apk-2pass-cn]              |
+| Audio tagging                          | [Address][apk-at]                  | [点此][apk-at-cn]                 |
+| Audio tagging (WearOS)                 | [Address][apk-at-wearos]           | [点此][apk-at-wearos-cn]          |
+| Speaker identification                 | [Address][apk-sid]                 | [点此][apk-sid-cn]                |
+| Spoken language identification         | [Address][apk-slid]                | [点此][apk-slid-cn]               |
+| Keyword spotting                       | [Address][apk-kws]                 | [点此][apk-kws-cn]                |
+
+</details>
+
+### Links for pre-built Flutter APPs
+
+<details>
+
+#### Real-time speech recognition
+
+| Description                    | URL                                 | 中国用户                            |
+|--------------------------------|-------------------------------------|-------------------------------------|
+| Streaming speech recognition   | [Address][apk-flutter-streaming-asr]| [点此][apk-flutter-streaming-asr-cn]|
+
+#### Text-to-speech
+
+| Description                              | URL                                | 中国用户                           |
+|------------------------------------------|------------------------------------|------------------------------------|
+| Android (arm64-v8a, armeabi-v7a, x86_64) | [Address][flutter-tts-android]     | [点此][flutter-tts-android-cn]     |
+| Linux (x64)                              | [Address][flutter-tts-linux]       | [点此][flutter-tts-linux-cn]       |
+| macOS (x64)                              | [Address][flutter-tts-macos-x64]   | [点此][flutter-tts-macos-x64-cn] |
+| macOS (arm64)                            | [Address][flutter-tts-macos-arm64] | [点此][flutter-tts-macos-arm64-cn]   |
+| Windows (x64)                            | [Address][flutter-tts-win-x64]     | [点此][flutter-tts-win-x64-cn]     |
+
+> Note: You need to build from source for iOS.
+
+</details>
+
+### Links for pre-built Lazarus APPs
+
+<details>
+
+#### Generating subtitles
+
+| Description                    | URL                        | 中国用户                   |
+|--------------------------------|----------------------------|----------------------------|
+| Generate subtitles (生成字幕)  | [Address][lazarus-subtitle]| [点此][lazarus-subtitle-cn]|
+
+</details>
+
+### Links for pre-trained models
+
+<details>
+
+| Description                                 | URL                                                                                   |
+|---------------------------------------------|---------------------------------------------------------------------------------------|
+| Speech recognition (speech to text, ASR)    | [Address][asr-models]                                                                 |
+| Text-to-speech (TTS)                        | [Address][tts-models]                                                                 |
+| VAD                                         | [Address][vad-models]                                                                 |
+| Keyword spotting                            | [Address][kws-models]                                                                 |
+| Audio tagging                               | [Address][at-models]                                                                  |
+| Speaker identification (Speaker ID)         | [Address][sid-models]                                                                 |
+| Spoken language identification (Language ID)| See multi-lingual [Whisper][Whisper] ASR models from  [Speech recognition][asr-models]|
+| Punctuation                                 | [Address][punct-models]                                                               |
+| Speaker segmentation                        | [Address][speaker-segmentation-models]                                                |
+| Speech enhancement                          | [Address][speech-enhancement-models]                                                  |
+| Source separation                           | [Address][source-separation-models]                                                  |
+
+</details>
+
+#### Some pre-trained ASR models (Streaming)
+
+<details>
+
+Please see
+
+  - <https://k2-fsa.github.io/sherpa/onnx/pretrained_models/online-transducer/index.html>
+  - <https://k2-fsa.github.io/sherpa/onnx/pretrained_models/online-paraformer/index.html>
+  - <https://k2-fsa.github.io/sherpa/onnx/pretrained_models/online-ctc/index.html>
+
+for more models. The following table lists only **SOME** of them.
+
+
+|Name | Supported Languages| Description|
+|-----|-----|----|
+|[sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20][sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20]| Chinese, English| See [also](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/online-transducer/zipformer-transducer-models.html#csukuangfj-sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20-bilingual-chinese-english)|
+|[sherpa-onnx-streaming-zipformer-small-bilingual-zh-en-2023-02-16][sherpa-onnx-streaming-zipformer-small-bilingual-zh-en-2023-02-16]| Chinese, English| See [also](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/online-transducer/zipformer-transducer-models.html#sherpa-onnx-streaming-zipformer-small-bilingual-zh-en-2023-02-16-bilingual-chinese-english)|
+|[sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23][sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23]|Chinese| Suitable for Cortex A7 CPU. See [also](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/online-transducer/zipformer-transducer-models.html#sherpa-onnx-streaming-zipformer-zh-14m-2023-02-23)|
+|[sherpa-onnx-streaming-zipformer-en-20M-2023-02-17][sherpa-onnx-streaming-zipformer-en-20M-2023-02-17]|English|Suitable for Cortex A7 CPU. See [also](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/online-transducer/zipformer-transducer-models.html#sherpa-onnx-streaming-zipformer-en-20m-2023-02-17)|
+|[sherpa-onnx-streaming-zipformer-korean-2024-06-16][sherpa-onnx-streaming-zipformer-korean-2024-06-16]|Korean| See [also](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/online-transducer/zipformer-transducer-models.html#sherpa-onnx-streaming-zipformer-korean-2024-06-16-korean)|
+|[sherpa-onnx-streaming-zipformer-fr-2023-04-14][sherpa-onnx-streaming-zipformer-fr-2023-04-14]|French| See [also](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/online-transducer/zipformer-transducer-models.html#shaojieli-sherpa-onnx-streaming-zipformer-fr-2023-04-14-french)|
+
+</details>
+
+
+#### Some pre-trained ASR models (Non-Streaming)
+
+<details>
+
+Please see
+
+  - <https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-transducer/index.html>
+  - <https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-paraformer/index.html>
+  - <https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-ctc/index.html>
+  - <https://k2-fsa.github.io/sherpa/onnx/pretrained_models/telespeech/index.html>
+  - <https://k2-fsa.github.io/sherpa/onnx/pretrained_models/whisper/index.html>
+
+for more models. The following table lists only **SOME** of them.
+
+|Name | Supported Languages| Description|
+|-----|-----|----|
+|[sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-transducer/nemo-transducer-models.html#sherpa-onnx-nemo-parakeet-tdt-0-6b-v2-int8-english)| English | It is converted from <https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2>|
+|[Whisper tiny.en](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2)|English| See [also](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/whisper/tiny.en.html)|
+|[Moonshine tiny][Moonshine tiny]|English|See [also](https://github.com/usefulsensors/moonshine)|
+|[sherpa-onnx-zipformer-ctc-zh-int8-2025-07-03](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-ctc/icefall/zipformer.html#sherpa-onnx-zipformer-ctc-zh-int8-2025-07-03-chinese)|Chinese| A Zipformer CTC model|
+|[sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17][sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17]|Chinese, Cantonese, English, Korean, Japanese| 支持多种中文方言. See [also](https://k2-fsa.github.io/sherpa/onnx/sense-voice/index.html)|
+|[sherpa-onnx-paraformer-zh-2024-03-09][sherpa-onnx-paraformer-zh-2024-03-09]|Chinese, English| 也支持多种中文方言. See [also](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-paraformer/paraformer-models.html#csukuangfj-sherpa-onnx-paraformer-zh-2024-03-09-chinese-english)|
+|[sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01][sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01]|Japanese|See [also](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-transducer/zipformer-transducer-models.html#sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01-japanese)|
+|[sherpa-onnx-nemo-transducer-giga-am-russian-2024-10-24][sherpa-onnx-nemo-transducer-giga-am-russian-2024-10-24]|Russian|See [also](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-transducer/nemo-transducer-models.html#sherpa-onnx-nemo-transducer-giga-am-russian-2024-10-24-russian)|
+|[sherpa-onnx-nemo-ctc-giga-am-russian-2024-10-24][sherpa-onnx-nemo-ctc-giga-am-russian-2024-10-24]|Russian| See [also](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-ctc/nemo/russian.html#sherpa-onnx-nemo-ctc-giga-am-russian-2024-10-24)|
+|[sherpa-onnx-zipformer-ru-2024-09-18][sherpa-onnx-zipformer-ru-2024-09-18]|Russian|See [also](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-transducer/zipformer-transducer-models.html#sherpa-onnx-zipformer-ru-2024-09-18-russian)|
+|[sherpa-onnx-zipformer-korean-2024-06-24][sherpa-onnx-zipformer-korean-2024-06-24]|Korean|See [also](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-transducer/zipformer-transducer-models.html#sherpa-onnx-zipformer-korean-2024-06-24-korean)|
+|[sherpa-onnx-zipformer-thai-2024-06-20][sherpa-onnx-zipformer-thai-2024-06-20]|Thai| See [also](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-transducer/zipformer-transducer-models.html#sherpa-onnx-zipformer-thai-2024-06-20-thai)|
+|[sherpa-onnx-telespeech-ctc-int8-zh-2024-06-04][sherpa-onnx-telespeech-ctc-int8-zh-2024-06-04]|Chinese| 支持多种方言. See [also](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/telespeech/models.html#sherpa-onnx-telespeech-ctc-int8-zh-2024-06-04)|
+
+</details>
+
+### Useful links
+
+- Documentation: https://k2-fsa.github.io/sherpa/onnx/
+- Bilibili 演示视频: https://search.bilibili.com/all?keyword=%E6%96%B0%E4%B8%80%E4%BB%A3Kaldi
+
+</details>
